@@ -54,6 +54,37 @@ On Windows the admin HTTP API and the `rusnel ctl` subcommand are
 not available — both are Unix-socket-based. Tunnels, TLS, and
 embedded credentials work the same as on Unix.
 
+## Library integration
+
+Rusnel can be embedded directly in async hosts that need programmatic client
+lifecycle control, such as Tauri apps, daemons, or mobile bridges. Use the
+native [`ClientConfig`](src/lib.rs) and [`RusnelHandle`](src/client/handle.rs)
+instead of spawning the CLI process.
+
+```rust
+use rusnel::{RusnelEvent, RusnelHandle};
+
+# async fn run(config: rusnel::ClientConfig) -> Result<(), Box<dyn std::error::Error>> {
+let handle = RusnelHandle::new();
+let mut events = handle.subscribe();
+
+handle.start(config).await?;
+
+while let Ok(event) = events.recv().await {
+    if matches!(event, RusnelEvent::Exited { .. }) {
+        break;
+    }
+}
+
+handle.stop().await?;
+# Ok(())
+# }
+```
+
+For lower-level integrations, `rusnel::client::run_async_with_shutdown(config,
+shutdown_rx)` exposes the same client run loop with a caller-owned shutdown
+receiver while preserving the CLI `Ctrl+C` path.
+
 ### Docker
 
 Multi-arch images (`linux/amd64`, `linux/arm64`) are published to GHCR:

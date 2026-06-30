@@ -22,6 +22,10 @@ use crate::common::tunnel::{client_send_session_hello, receive_open_conn, reply_
 use crate::common::udp::{tunnel_udp_client, tunnel_udp_server};
 use crate::{ClientConfig, ReconnectConfig};
 
+pub mod error;
+pub mod handle;
+pub mod lifecycle;
+
 pub async fn run_async(config: ClientConfig) -> Result<()> {
     // Direct connections share QUIC endpoints across reconnects (one per
     // address family) so we don't pay the bind-syscall cost on every retry.
@@ -45,6 +49,62 @@ pub async fn run_async(config: ClientConfig) -> Result<()> {
         if signal::ctrl_c().await.is_ok() {
             info!("shutdown signal received");
             let _ = shutdown_tx_clone.send(());
+        }
+    });
+
+    let result = run_with_reconnect(endpoints.as_mut(), &server_name, &config, &shutdown_tx).await;
+
+    if let Some(pool) = endpoints.as_ref() {
+        pool.wait_idle().await;
+    }
+    debug!("client run loop exited");
+    result
+}
+
+/// Run the client with a caller-owned shutdown signal.
+///
+/// This is the embeddable-client entry point for async hosts such as Tauri,
+/// daemons, or Android bindings. It preserves the CLI `Ctrl+C` behavior while
+/// also letting the caller trigger the same internal shutdown broadcast through
+/// `external_rx`.
+///
+/// # Errors
+///
+/// Returns any error produced while building endpoints, connecting, or running
+/// the reconnect loop.
+pub async fn run_async_with_shutdown(
+    config: ClientConfig,
+    mut external_rx: broadcast::Receiver<()>,
+) -> Result<()> {
+    // Direct and proxied endpoint setup must match `run_async`, otherwise the
+    // library path would behave differently from the CLI path.
+    let mut endpoints = match &config.proxy {
+        None => Some(EndpointPool::new(&config)?),
+        Some(p) => {
+            info!(proxy = %p, "routing QUIC through SOCKS5 proxy");
+            None
+        }
+    };
+    let server_name = client_server_name(&config.tls, &config.server.host);
+
+    let (shutdown_tx, _) = broadcast::channel::<()>(1);
+
+    // Bridge both process-level and host-level shutdown into the same internal
+    // broadcast used by reconnect sleeps, active QUIC connections, and stdio
+    // tunnels.
+    let shutdown_tx_bridge = shutdown_tx.clone();
+    tokio::spawn(async move {
+        tokio::select! {
+            res = signal::ctrl_c() => {
+                if res.is_ok() {
+                    info!("shutdown signal received (ctrl-c)");
+                    let _ = shutdown_tx_bridge.send(());
+                }
+            }
+            _ = external_rx.recv() => {
+                info!("shutdown signal received (external)");
+                let _ = shutdown_tx_bridge.send(());
+            }
         }
     });
 

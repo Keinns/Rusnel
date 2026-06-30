@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### 2026-05-06
+
+- Added embeddable client APIs: `client::run_async_with_shutdown` and
+  `RusnelHandle` with `start`, `stop`, `state`, and `subscribe`, so async hosts
+  can control a Rusnel client without spawning the CLI process.
+
 ## [0.11.2] - 2026-05-06
 
 ### Fixed

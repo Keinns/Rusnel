@@ -22,6 +22,10 @@ pub mod ctl;
 pub mod embedded;
 pub mod server;
 
+pub use client::error::ClientError;
+pub use client::handle::RusnelHandle;
+pub use client::lifecycle::{ExitReason, LifecycleState, RusnelEvent};
+
 #[derive(Debug)]
 pub struct ServerConfig {
     pub host: IpAddr,
