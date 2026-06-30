@@ -4,3 +4,4 @@ server_output.txt
 /benchmark/*/results/**
 !/benchmark/*/results/**/
 !/benchmark/*/results/**/*.png
+.codegraph/
