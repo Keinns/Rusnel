@@ -36,9 +36,13 @@ pub async fn tunnel_socks_client(
     remote: RemoteRequest,
     handle: TunnelHandleOpt,
     tunnel_id: u64,
+    prebound: Option<TcpListener>,
 ) -> Result<()> {
     let local_addr = remote.local_socket_addr();
-    let listener = TcpListener::bind(local_addr).await?;
+    let listener = match prebound {
+        Some(listener) => listener,
+        None => TcpListener::bind(local_addr).await?,
+    };
     info!(addr = %local_addr, proto = "socks5", "listening");
 
     let local_counter = AtomicUsize::new(0);

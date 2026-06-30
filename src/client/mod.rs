@@ -391,14 +391,16 @@ async fn run_connection(
     // Negotiate the whole tunnel set in one shot. If the server
     // rejects (policy violation, version mismatch, …) we surface that
     // as a Disconnect — the reconnect loop will keep retrying.
-    let tunnel_ids = match send_session_hello(&connection, &config.remotes).await {
-        Ok(ids) => ids,
+    let (tunnel_ids, assigned_ports) = match send_session_hello(&connection, &config.remotes).await
+    {
+        Ok(result) => result,
         Err(e) => {
             return SessionOutcome::Disconnected(format!("session hello failed: {e}"));
         }
     };
+    let remotes = apply_assigned_ports(&config.remotes, &assigned_ports);
     info!(count = tunnel_ids.len(), "session established");
-    for (remote, tunnel_id) in config.remotes.iter().zip(tunnel_ids.iter().copied()) {
+    for (remote, tunnel_id) in remotes.iter().zip(tunnel_ids.iter().copied()) {
         let dir = if matches!(remote.direction, Direction::Reverse) {
             "reverse"
         } else {
@@ -413,7 +415,7 @@ async fn run_connection(
         tunnel_ids
             .iter()
             .copied()
-            .zip(config.remotes.iter().cloned())
+            .zip(remotes.iter().cloned())
             .collect(),
     );
 
@@ -422,7 +424,7 @@ async fn run_connection(
     // Spawn a per-forward-remote listener task. Reverse remotes have
     // nothing to bind on the client — their listener runs on the
     // server, and conns flow back through the accept loop below.
-    for (remote, tunnel_id) in config.remotes.iter().zip(tunnel_ids.iter().copied()) {
+    for (remote, tunnel_id) in remotes.iter().zip(tunnel_ids.iter().copied()) {
         if matches!(remote.direction, Direction::Reverse) {
             continue;
         }
@@ -504,12 +506,39 @@ async fn run_connection(
 async fn send_session_hello(
     quic_connection: &Connection,
     remotes: &[RemoteRequest],
-) -> Result<Vec<u64>> {
+) -> Result<(Vec<u64>, Vec<Option<u16>>)> {
     let (mut send, mut recv) = quic_connection.open_bi().await?;
     let hello = SessionHello {
         remotes: remotes.to_vec(),
     };
     client_send_session_hello(&hello, &mut send, &mut recv).await
+}
+
+fn apply_assigned_ports(
+    remotes: &[RemoteRequest],
+    assigned_ports: &[Option<u16>],
+) -> Vec<RemoteRequest> {
+    remotes
+        .iter()
+        .cloned()
+        .zip(assigned_ports.iter().copied())
+        .map(|(mut remote, assigned)| {
+            if let Some(port) = assigned {
+                replace_local_port(&mut remote, port);
+            }
+            remote
+        })
+        .collect()
+}
+
+fn replace_local_port(remote: &mut RemoteRequest, port: u16) {
+    match &mut remote.kind {
+        RemoteKind::Tcp { local, .. }
+        | RemoteKind::Udp { local, .. }
+        | RemoteKind::Socks5 { local } => {
+            *local = SocketAddr::new(local.ip(), port);
+        }
+    }
 }
 
 /// Drive the local listener for one *forward* tunnel. Each accepted
@@ -530,10 +559,10 @@ async fn handle_forward_tunnel(
     }
     match &remote.kind {
         RemoteKind::Socks5 { .. } => {
-            tunnel_socks_client(quic_connection, remote, None, tunnel_id).await?
+            tunnel_socks_client(quic_connection, remote, None, tunnel_id, None).await?
         }
         RemoteKind::Tcp { .. } => {
-            tunnel_tcp_client(quic_connection, remote, None, tunnel_id).await?
+            tunnel_tcp_client(quic_connection, remote, None, tunnel_id, None).await?
         }
         RemoteKind::Udp { .. } => {
             tunnel_udp_client(quic_connection, remote, None, tunnel_id).await?

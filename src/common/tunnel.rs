@@ -67,17 +67,21 @@ async fn read_framed<T: SerdeHelper>(recv: &mut RecvStream) -> Result<T> {
 
 /// Client side of the hello: send the full tunnel-declaration batch
 /// and wait for the server's verdict. On success, returns the list of
-/// server-assigned `tunnel_id`s in the same order as `hello.remotes`.
+/// server-assigned `tunnel_id`s and any server-assigned reverse listener
+/// ports in the same order as `hello.remotes`.
 pub async fn client_send_session_hello(
     hello: &SessionHello,
     send: &mut SendStream,
     recv: &mut RecvStream,
-) -> Result<Vec<u64>> {
+) -> Result<(Vec<u64>, Vec<Option<u16>>)> {
     debug!(remotes = hello.remotes.len(), "sending session hello");
     write_framed(send, hello).await?;
     send.shutdown().await?;
     match read_framed::<SessionHelloResponse>(recv).await? {
-        SessionHelloResponse::Ok { tunnel_ids } => {
+        SessionHelloResponse::Ok {
+            tunnel_ids,
+            assigned_ports,
+        } => {
             if tunnel_ids.len() != hello.remotes.len() {
                 return Err(anyhow!(
                     "server returned {} tunnel ids for {} remotes",
@@ -85,8 +89,20 @@ pub async fn client_send_session_hello(
                     hello.remotes.len()
                 ));
             }
+            if !assigned_ports.is_empty() && assigned_ports.len() != hello.remotes.len() {
+                return Err(anyhow!(
+                    "server returned {} assigned ports for {} remotes",
+                    assigned_ports.len(),
+                    hello.remotes.len()
+                ));
+            }
+            let assigned_ports = if assigned_ports.is_empty() {
+                vec![None; hello.remotes.len()]
+            } else {
+                assigned_ports
+            };
             debug!(count = tunnel_ids.len(), "session hello accepted");
-            Ok(tunnel_ids)
+            Ok((tunnel_ids, assigned_ports))
         }
         SessionHelloResponse::Failed(reason) => Err(anyhow!("server rejected session: {reason}")),
     }

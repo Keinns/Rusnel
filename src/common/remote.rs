@@ -221,11 +221,16 @@ pub struct SessionHello {
 impl SerdeHelper for SessionHello {}
 
 /// Server's reply to [`SessionHello`]. On success, `tunnel_ids[i]` is
-/// the server-assigned id for `hello.remotes[i]`. On failure, the
-/// server closes the connection.
+/// the server-assigned id for `hello.remotes[i]`, and `assigned_ports[i]`
+/// carries a server-selected reverse listener port when the client requested
+/// local port `0`. On failure, the server closes the connection.
 #[derive(Serialize, Deserialize, Debug)]
 pub enum SessionHelloResponse {
-    Ok { tunnel_ids: Vec<u64> },
+    Ok {
+        tunnel_ids: Vec<u64>,
+        #[serde(default)]
+        assigned_ports: Vec<Option<u16>>,
+    },
     Failed(String),
 }
 
@@ -691,6 +696,14 @@ mod tests {
         assert!(r.is_reversed());
         assert!(r.is_socks());
         assert_eq!(r.local_socket_addr().port(), 5000);
+    }
+
+    #[test]
+    fn reverse_socks_dynamic_local_port() {
+        let r = parse("R:0.0.0.0:0:socks");
+        assert!(r.is_reversed());
+        assert!(r.is_socks());
+        assert_eq!(r.local_socket_addr(), SocketAddr::new(ip("0.0.0.0"), 0));
     }
 
     #[test]

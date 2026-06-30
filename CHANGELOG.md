@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added embeddable client APIs: `client::run_async_with_shutdown` and
   `RusnelHandle` with `start`, `stop`, `state`, and `subscribe`, so async hosts
   can control a Rusnel client without spawning the CLI process.
+- Added server-assigned dynamic ports for reverse TCP and SOCKS5 listeners when
+  the client requests local port `0`, including an end-to-end reverse SOCKS5
+  curl test.
 
 ## [0.11.2] - 2026-05-06
 

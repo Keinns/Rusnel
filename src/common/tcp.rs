@@ -316,12 +316,16 @@ pub async fn tunnel_tcp_client(
     remote: RemoteRequest,
     handle: TunnelHandleOpt,
     tunnel_id: u64,
+    prebound: Option<TcpListener>,
 ) -> Result<()> {
     // Use SocketAddr's Display so IPv6 literals come out bracketed
     // (`[::1]:8080`) — a manual `format!("{ip}:{port}")` on an IPv6
     // `IpAddr` produces `::1:8080`, which `TcpListener::bind` rejects.
     let local_addr = remote.local_socket_addr();
-    let listener = TcpListener::bind(local_addr).await?;
+    let listener = match prebound {
+        Some(listener) => listener,
+        None => TcpListener::bind(local_addr).await?,
+    };
     info!(addr = %local_addr, "listening");
 
     // Local fallback counter for log-only correlation when admin

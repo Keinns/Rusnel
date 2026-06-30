@@ -5,14 +5,16 @@
 pub mod admin;
 pub mod state;
 
+use std::net::SocketAddr;
 #[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use quinn::{Connection, ConnectionError, VarInt};
+use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -221,7 +223,8 @@ async fn handle_client_connection(
     // soon as the hello is accepted, before any conn flows. Forward
     // tunnels are passive on the server side; their conns arrive as
     // OpenConn frames on the per-conn loop below.
-    for tunnel in &registered_tunnels {
+    for prepared in registered_tunnels {
+        let tunnel = prepared.entry;
         let dir = match tunnel.direction {
             Direction::Forward => "forward",
             Direction::Reverse => "reverse",
@@ -237,6 +240,7 @@ async fn handle_client_connection(
                 connection.clone(),
                 state.clone(),
                 tunnel.clone(),
+                prepared.prebound,
                 &mut tunnels,
             );
         }
@@ -328,7 +332,7 @@ async fn perform_session_hello(
     client: &Arc<state::ClientEntry>,
     allow_reverse: bool,
     allow_socks: bool,
-) -> Result<Vec<Arc<TunnelEntry>>> {
+) -> Result<Vec<PreparedTunnel>> {
     let (mut send, mut recv) = connection.accept_bi().await?;
     let hello = server_receive_session_hello(&mut recv).await?;
 
@@ -338,10 +342,110 @@ async fn perform_session_hello(
         return Err(anyhow::anyhow!(reason));
     }
 
-    let tunnels = state.register_tunnels(client, &hello.remotes);
+    let prepared_remotes = prepare_reverse_dynamic_ports(hello.remotes).await?;
+    let remotes: Vec<RemoteRequest> = prepared_remotes
+        .iter()
+        .map(|remote| remote.request.clone())
+        .collect();
+    let assigned_ports: Vec<Option<u16>> = prepared_remotes
+        .iter()
+        .map(|remote| remote.assigned_port)
+        .collect();
+    let prebound_listeners: Vec<Option<TcpListener>> = prepared_remotes
+        .into_iter()
+        .map(|remote| remote.prebound)
+        .collect();
+
+    let tunnels = state.register_tunnels(client, &remotes);
     let tunnel_ids: Vec<u64> = tunnels.iter().map(|t| t.id).collect();
-    server_reply_session_hello(&mut send, &SessionHelloResponse::Ok { tunnel_ids }).await?;
-    Ok(tunnels)
+    server_reply_session_hello(
+        &mut send,
+        &SessionHelloResponse::Ok {
+            tunnel_ids,
+            assigned_ports,
+        },
+    )
+    .await?;
+
+    Ok(tunnels
+        .into_iter()
+        .zip(prebound_listeners)
+        .map(|(entry, prebound)| PreparedTunnel { entry, prebound })
+        .collect())
+}
+
+struct PreparedRemote {
+    request: RemoteRequest,
+    assigned_port: Option<u16>,
+    prebound: Option<TcpListener>,
+}
+
+struct PreparedTunnel {
+    entry: Arc<TunnelEntry>,
+    prebound: Option<TcpListener>,
+}
+
+async fn prepare_reverse_dynamic_ports(remotes: Vec<RemoteRequest>) -> Result<Vec<PreparedRemote>> {
+    let mut prepared = Vec::with_capacity(remotes.len());
+
+    for remote in remotes {
+        if !matches!(remote.direction, Direction::Reverse) || remote.local_socket_addr().port() != 0
+        {
+            prepared.push(PreparedRemote {
+                request: remote,
+                assigned_port: None,
+                prebound: None,
+            });
+            continue;
+        }
+
+        prepared.push(prebind_dynamic_reverse_remote(remote).await?);
+    }
+
+    Ok(prepared)
+}
+
+async fn prebind_dynamic_reverse_remote(remote: RemoteRequest) -> Result<PreparedRemote> {
+    match remote.kind {
+        RemoteKind::Tcp {
+            local,
+            remote: target,
+        } => {
+            let (local, listener) = bind_dynamic_tcp_listener(local).await?;
+            Ok(PreparedRemote {
+                request: RemoteRequest::new(
+                    Direction::Reverse,
+                    RemoteKind::Tcp {
+                        local,
+                        remote: target,
+                    },
+                ),
+                assigned_port: Some(local.port()),
+                prebound: Some(listener),
+            })
+        }
+        RemoteKind::Socks5 { local } => {
+            let (local, listener) = bind_dynamic_tcp_listener(local).await?;
+            Ok(PreparedRemote {
+                request: RemoteRequest::new(Direction::Reverse, RemoteKind::Socks5 { local }),
+                assigned_port: Some(local.port()),
+                prebound: Some(listener),
+            })
+        }
+        RemoteKind::Udp { local, remote } => Ok(PreparedRemote {
+            request: RemoteRequest::new(Direction::Reverse, RemoteKind::Udp { local, remote }),
+            assigned_port: None,
+            prebound: None,
+        }),
+    }
+}
+
+async fn bind_dynamic_tcp_listener(requested: SocketAddr) -> Result<(SocketAddr, TcpListener)> {
+    let listener = TcpListener::bind(requested)
+        .await
+        .with_context(|| format!("failed to bind dynamic reverse listener {requested}"))?;
+    let assigned_port = listener.local_addr()?.port();
+    Ok((SocketAddr::new(requested.ip(), assigned_port), listener))
 }
 
 /// Static validation of a hello batch against the server's policy.
@@ -367,6 +471,7 @@ fn spawn_reverse_handler(
     connection: Connection,
     state: ServerState,
     tunnel: Arc<TunnelEntry>,
+    prebound: Option<TcpListener>,
     tasks: &mut JoinSet<()>,
 ) {
     let handle = Arc::new(TunnelHandle::new(state, tunnel.clone()));
@@ -385,13 +490,14 @@ fn spawn_reverse_handler(
             let request = RemoteRequest::new(tunnel.direction, tunnel.kind.clone());
             let result = match &tunnel.kind {
                 RemoteKind::Tcp { .. } => {
-                    tunnel_tcp_client(connection, request, Some(handle), tunnel.id).await
+                    tunnel_tcp_client(connection, request, Some(handle), tunnel.id, prebound).await
                 }
                 RemoteKind::Udp { .. } => {
                     tunnel_udp_client(connection, request, Some(handle), tunnel.id).await
                 }
                 RemoteKind::Socks5 { .. } => {
-                    tunnel_socks_client(connection, request, Some(handle), tunnel.id).await
+                    tunnel_socks_client(connection, request, Some(handle), tunnel.id, prebound)
+                        .await
                 }
             };
             if let Err(e) = result {

@@ -229,6 +229,16 @@ servers reachable via a v6-preferring resolver still connect within
 ~250 ms. Server-side resources (including reverse-tunnel listeners) are
 released the moment the QUIC connection drops.
 
+Reverse TCP and SOCKS5 listeners may use local port `0` to ask the server to
+bind an OS-assigned free port, avoiding fixed-port conflicts between clients:
+
+```bash
+rusnel client --tls-fingerprint sha256:abcd... tunnel.example.com:8080 R:0.0.0.0:0:socks
+```
+
+The accepted tunnel log reports the assigned listener port, for example
+`R:49152=>socks`.
+
 ## Authentication
 
 Both the server and the client require an explicit TLS-mode flag — there is

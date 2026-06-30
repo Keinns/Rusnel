@@ -138,8 +138,14 @@ async fn run_test_session(connection: Connection) {
         tunnel_ids.push(id);
         tunnels.insert(id, r.clone());
     }
-    if let Err(e) =
-        server_reply_session_hello(&mut hello_send, &SessionHelloResponse::Ok { tunnel_ids }).await
+    if let Err(e) = server_reply_session_hello(
+        &mut hello_send,
+        &SessionHelloResponse::Ok {
+            tunnel_ids,
+            assigned_ports: vec![None],
+        },
+    )
+    .await
     {
         info!("hello reply failed: {e}");
         return;
