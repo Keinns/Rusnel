@@ -35,7 +35,7 @@ FROM gcr.io/distroless/cc-debian12:nonroot
 
 LABEL org.opencontainers.image.title="rusnel" \
       org.opencontainers.image.description="A fast TCP/UDP tunnel over QUIC, written in Rust." \
-      org.opencontainers.image.source="https://github.com/guyte149/Rusnel" \
+      org.opencontainers.image.source="https://github.com/Keinns/Rusnel" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=builder /usr/local/bin/rusnel /rusnel

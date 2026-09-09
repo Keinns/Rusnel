@@ -41,14 +41,14 @@ cargo install rusnel
 Or build from source:
 
 ```bash
-git clone https://github.com/guyte149/Rusnel.git
+git clone https://github.com/Keinns/Rusnel.git
 cd Rusnel
 cargo build --release
 ```
 
 Pre-built binaries for Linux (x86_64 + aarch64, gnu and musl), macOS
 (x86_64 + Apple Silicon), and Windows (x86_64) are attached to each
-[GitHub release](https://github.com/guyte149/Rusnel/releases).
+[GitHub release](https://github.com/Keinns/Rusnel/releases).
 
 On Windows the admin HTTP API and the `rusnel ctl` subcommand are
 not available — both are Unix-socket-based. Tunnels, TLS, and
@@ -90,8 +90,8 @@ receiver while preserving the CLI `Ctrl+C` path.
 Multi-arch images (`linux/amd64`, `linux/arm64`) are published to GHCR:
 
 ```bash
-docker pull ghcr.io/guyte149/rusnel:latest
-docker run --rm -p 8080:8080/udp ghcr.io/guyte149/rusnel \
+docker pull ghcr.io/keinns/rusnel:latest
+docker run --rm -p 8080:8080/udp ghcr.io/keinns/rusnel \
     server --tls-self-signed
 ```
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 2026-09-10
+
+- Repository URLs in crate metadata, README, and the Docker image
+  source label now point at https://github.com/Keinns/Rusnel.
+
 ### 2026-05-06
 
 - Added embeddable client APIs: `client::run_async_with_shutdown` and
